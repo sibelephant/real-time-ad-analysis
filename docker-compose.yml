@@ -1,0 +1,127 @@
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.19
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --overprovisioned
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr
+      - internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr
+      - internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr
+      - internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr
+      - redpanda:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "19644:9644"
+    networks:
+      - ad-analysis-network
+
+  zookeeper:
+    image: zookeeper:3.5.8
+    container_name: pinot-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - ad-analysis-network
+
+  pinot-controller:
+    image: apachepinot/pinot:1.0.0
+    container_name: pinot-controller
+    command: StartController -zkAddress zookeeper:2181
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9000:9000"
+    networks:
+      - ad-analysis-network
+
+  pinot-broker:
+    image: apachepinot/pinot:1.0.0
+    container_name: pinot-broker
+    command: StartBroker -zkAddress zookeeper:2181
+    restart: unless-stopped
+    depends_on:
+      - pinot-controller
+    ports:
+      - "8099:8099"
+    networks:
+      - ad-analysis-network
+
+  pinot-server:
+    image: apachepinot/pinot:1.0.0
+    container_name: pinot-server
+    command: StartServer -zkAddress zookeeper:2181
+    restart: unless-stopped
+    depends_on:
+      - pinot-broker
+    ports:
+      - "8098:8098"
+    networks:
+      - ad-analysis-network
+
+  jobmanager:
+    build:
+      context: ./flink
+    container_name: flink-jobmanager
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./flink:/flink:ro
+    networks:
+      - ad-analysis-network
+
+  taskmanager:
+    build:
+      context: ./flink
+    container_name: flink-taskmanager
+    command: taskmanager
+    depends_on:
+      - jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    networks:
+      - ad-analysis-network
+
+  app:
+    build:
+      context: ./app
+    container_name: ad-analysis-api
+    environment:
+      KAFKA_BROKER: redpanda:9092
+      KAFKA_TOPIC: ad-events
+      PINOT_BROKER: pinot-broker:8099
+    depends_on:
+      - redpanda
+      - pinot-broker
+    ports:
+      - "8000:8000"
+    networks:
+      - ad-analysis-network
+
+networks:
+  ad-analysis-network:
+    driver: bridge
