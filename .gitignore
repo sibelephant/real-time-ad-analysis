@@ -5,3 +5,4 @@ __pycache__/
 venv/
 .venv/
 flink/*.jar
+implementation_plan1.md
